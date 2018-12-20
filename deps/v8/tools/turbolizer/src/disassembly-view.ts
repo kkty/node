@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {PROF_COLS, UNICODE_BLOCK} from "./constants.js"
-import {SelectionBroker} from "./selection-broker.js"
-import {TextView} from "./text-view.js"
+import { PROF_COLS, UNICODE_BLOCK } from "../src/constants"
+import { SelectionBroker } from "../src/selection-broker"
+import { TextView } from "../src/text-view"
+import { SourceResolver } from "./source-resolver";
 
 export class DisassemblyView extends TextView {
   SOURCE_POSITION_HEADER_REGEX: any;
@@ -21,36 +22,21 @@ export class DisassemblyView extends TextView {
        <ul id='disassembly-list' class='nolinenums noindent'>
        </ul>
      </pre>`;
+
     return pane;
   }
 
   constructor(parentId, broker: SelectionBroker) {
     super(parentId, broker, null);
     let view = this;
-    const sourceResolver = broker.sourceResolver;
     let ADDRESS_STYLE = {
-      css: 'tag',
-      linkHandler: function (text, fragment) {
-        const matches = text.match(/0x[0-9a-f]{8,16}\s*(?<offset>[0-9a-f]+)/);
+      css: ['linkable-text', 'tag'],
+      associateData: (text, fragment) => {
+        const matches = text.match(/0?x?[0-9a-fA-F]{8,16}\s*(?<offset>[0-9a-f]+)/);
         const offset = Number.parseInt(matches.groups["offset"], 16);
         if (!Number.isNaN(offset)) {
-          const [nodes, blockId] = sourceResolver.nodesForPCOffset(offset)
-          console.log("nodes for", offset, offset.toString(16), " are ", nodes);
-          if (nodes.length > 0) {
-            for (const nodeId of nodes) {
-              view.addHtmlElementForNodeId(nodeId, fragment);
-            }
-            return (e) => {
-              console.log(offset, nodes);
-              e.stopPropagation();
-              if (!e.shiftKey) {
-                view.selectionHandler.clear();
-              }
-              view.selectionHandler.select(nodes, true);
-            };
-          }
+          fragment.dataset.pcOffset = view.sourceResolver.getKeyPcOffset(offset);
         }
-        return undefined;
       }
     };
     let ADDRESS_LINK_STYLE = {
@@ -80,17 +66,11 @@ export class DisassemblyView extends TextView {
         BLOCK_HEADER_STYLE.block_id = Number(matches[0]);
         return BLOCK_HEADER_STYLE.block_id;
       },
-      linkHandler: function (text) {
+      associateData: function (text, fragment) {
         let matches = /\d+/.exec(text);
-        if (!matches) return undefined;
+        if (!matches) return;
         const blockId = matches[0];
-        return function (e) {
-          e.stopPropagation();
-          if (!e.shiftKey) {
-            view.selectionHandler.clear();
-          }
-          view.blockSelectionHandler.select([blockId], true);
-        };
+        fragment.dataset.blockId = blockId;
       }
     };
     const SOURCE_POSITION_HEADER_STYLE = {
@@ -99,7 +79,7 @@ export class DisassemblyView extends TextView {
     view.SOURCE_POSITION_HEADER_REGEX = /^\s*--[^<]*<.*(not inlined|inlined\((\d+)\)):(\d+)>\s*--/;
     let patterns = [
       [
-        [/^0x[0-9a-f]{8,16}\s*[0-9a-f]+\ /, ADDRESS_STYLE, 1],
+        [/^0?x?[0-9a-fA-F]{8,16}\s*[0-9a-f]+\ /, ADDRESS_STYLE, 1],
         [view.SOURCE_POSITION_HEADER_REGEX, SOURCE_POSITION_HEADER_STYLE, -1],
         [/^\s+-- B\d+ start.*/, BLOCK_HEADER_STYLE, -1],
         [/^.*/, UNCLASSIFIED_STYLE, -1]
@@ -136,6 +116,34 @@ export class DisassemblyView extends TextView {
       ]
     ];
     view.setPatterns(patterns);
+
+    const linkHandler = (e) => {
+      const offset = e.target.dataset.pcOffset;
+      if (typeof offset != "undefined" && !Number.isNaN(offset)) {
+        const [nodes, blockId] = view.sourceResolver.nodesForPCOffset(offset)
+        if (nodes.length > 0) {
+          e.stopPropagation();
+          if (!e.shiftKey) {
+            view.selectionHandler.clear();
+          }
+          view.selectionHandler.select(nodes, true);
+        }
+      }
+      return undefined;
+    }
+    view.divNode.addEventListener('click', linkHandler);
+
+    const linkHandlerBlock = (e) => {
+      const blockId = e.target.dataset.blockId;
+      if (typeof blockId != "undefined" && !Number.isNaN(blockId)) {
+        e.stopPropagation();
+        if (!e.shiftKey) {
+          view.selectionHandler.clear();
+        }
+        view.blockSelectionHandler.select([blockId], true);
+      };
+    }
+    view.divNode.addEventListener('click', linkHandlerBlock);
   }
 
   initializeCode(sourceText, sourcePosition) {
